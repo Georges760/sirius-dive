@@ -78,7 +78,7 @@ Navigate with `j`/`k` or arrow keys. Toggle overlays with `d` (depth), `t` (temp
 
 ## Protocol
 
-The Mares ECOP protocol is documented in [FINDINGS.md](../FINDINGS.md). Key points:
+The Mares ECOP protocol is documented in [FINDINGS.md](FINDINGS.md). Key points:
 
 - Communication happens over two GATT characteristics (write + notify) on a custom BLE service
 - Commands use 2-byte headers `[cmd, cmd ^ 0xA5]`, responses are framed with `ACK (0xAA)` ... `END (0xEA)`
