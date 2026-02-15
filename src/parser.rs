@@ -27,10 +27,10 @@ fn read_u32_le(data: &[u8], offset: usize) -> u32 {
 ///   bits 16-19: month (1-12)
 ///   bits 20-31: year (absolute, e.g. 2025)
 fn decode_genius_datetime(packed: u32) -> NaiveDateTime {
-    let hour = (packed & 0x1F) as u32;
-    let minute = ((packed >> 5) & 0x3F) as u32;
-    let day = ((packed >> 11) & 0x1F) as u32;
-    let month = ((packed >> 16) & 0x0F) as u32;
+    let hour = packed & 0x1F;
+    let minute = (packed >> 5) & 0x3F;
+    let day = (packed >> 11) & 0x1F;
+    let month = (packed >> 16) & 0x0F;
     let year = ((packed >> 20) & 0x0FFF) as i32;
 
     NaiveDate::from_ymd_opt(year, month, day)
@@ -91,7 +91,7 @@ pub fn parse_dive_ecop(dive_index: u32, header: &[u8], profile: &[u8]) -> Result
         _ => DiveMode::Air,
     };
     // Surface time in minutes from settings bits 13-18
-    let surftime_min = ((settings >> 13) & 0x3F) as u32;
+    let surftime_min = (settings >> 13) & 0x3F;
 
     // Number of samples at 0x20
     let nsamples = read_u16_le(header, 0x20) as u32;

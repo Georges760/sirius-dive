@@ -227,10 +227,10 @@ pub async fn connect(
 
     let listener = tokio::spawn(async move {
         while let Some(notification) = stream.next().await {
-            if notification.uuid == read_uuid_filter {
-                if tx.send(notification.value).await.is_err() {
-                    break; // receiver dropped
-                }
+            if notification.uuid == read_uuid_filter
+                && tx.send(notification.value).await.is_err()
+            {
+                break; // receiver dropped
             }
         }
     });

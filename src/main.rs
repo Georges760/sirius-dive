@@ -1,6 +1,7 @@
 mod ble;
 mod parser;
 mod protocol;
+mod tui;
 mod types;
 
 use std::collections::HashSet;
@@ -67,6 +68,13 @@ enum Commands {
         address: Option<String>,
     },
 
+    /// View dive logs in an interactive TUI (offline, no BLE needed)
+    View {
+        /// Input JSON file with dive data
+        #[arg(short, long, default_value = "dives.json")]
+        input: PathBuf,
+    },
+
     /// Parse previously downloaded raw dive data (offline, no BLE needed)
     Parse {
         /// Directory containing raw dive data (dive_NNN_header.bin / dive_NNN_profile.bin)
@@ -103,6 +111,7 @@ async fn main() -> Result<()> {
             save_raw,
         } => cmd_download(address, output, format, save_raw).await,
         Commands::Debug { address } => cmd_debug(address).await,
+        Commands::View { input } => tui::run(input),
         Commands::Parse {
             raw_dir,
             output,
