@@ -43,6 +43,16 @@ fn decode_genius_datetime(packed: u32) -> NaiveDateTime {
         })
 }
 
+/// Extract the dive number from a raw 200-byte header without doing a full parse.
+/// The dive number is at offset 0x04 as a u32 LE.
+pub fn dive_number_from_header(header: &[u8]) -> u32 {
+    if header.len() >= 8 {
+        read_u32_le(header, 0x04)
+    } else {
+        0
+    }
+}
+
 /// Parse a dive from ECOP protocol data (header + profile).
 ///
 /// GENIUS header layout (200 bytes, from libdivecomputer mares_iconhd_parser.c):

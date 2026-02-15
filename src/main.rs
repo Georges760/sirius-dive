@@ -3,6 +3,7 @@ mod parser;
 mod protocol;
 mod types;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -320,6 +321,34 @@ async fn cmd_download(
     format: OutputFormat,
     save_raw: Option<PathBuf>,
 ) -> Result<()> {
+    // Load existing dives from output file (if any) for incremental download
+    let mut existing_dives: Vec<DiveLog> = Vec::new();
+    let mut existing_numbers: HashSet<u32> = HashSet::new();
+
+    if matches!(format, OutputFormat::Json) && output.exists() {
+        match std::fs::read_to_string(&output) {
+            Ok(contents) => match serde_json::from_str::<DiveData>(&contents) {
+                Ok(data) => {
+                    for dive in &data.dives {
+                        existing_numbers.insert(dive.number);
+                    }
+                    eprintln!(
+                        "Loaded {} existing dive(s) from {}",
+                        data.dives.len(),
+                        output.display()
+                    );
+                    existing_dives = data.dives;
+                }
+                Err(e) => {
+                    eprintln!("Warning: could not parse {}: {e}", output.display());
+                }
+            },
+            Err(e) => {
+                eprintln!("Warning: could not read {}: {e}", output.display());
+            }
+        }
+    }
+
     let adapter = ble::get_adapter().await?;
     let peripheral = find_device(&adapter, address.as_deref()).await?;
     let mut conn = ble::connect(&peripheral, None, None).await?;
@@ -342,13 +371,24 @@ async fn cmd_download(
         return Ok(());
     }
 
-    // Download all dive headers + profiles
-    let mut dives = Vec::new();
+    // Download dive headers + profiles, skipping already-downloaded dives
+    let mut new_dives = Vec::new();
+    let mut skipped = 0u32;
 
     for i in 0..dive_count {
-        eprint!("\rDownloading dive {}/{}...", i + 1, dive_count);
+        eprint!("\rChecking dive {}/{}...", i + 1, dive_count);
 
         let header = protocol::read_dive_header(&mut conn, i).await?;
+
+        // Check if we already have this dive
+        let dive_number = parser::dive_number_from_header(&header);
+        if existing_numbers.contains(&dive_number) {
+            eprintln!("\r  Dive #{}: already downloaded, skipping", dive_number);
+            skipped += 1;
+            continue;
+        }
+
+        eprint!("\rDownloading dive {}/{}...", i + 1, dive_count);
         let profile = protocol::read_dive_profile(&mut conn, i).await?;
 
         if let Some(ref raw_dir) = save_raw {
@@ -367,7 +407,7 @@ async fn cmd_download(
                     dive.duration_seconds,
                     dive.samples.len(),
                 );
-                dives.push(dive);
+                new_dives.push(dive);
             }
             Err(e) => {
                 eprintln!("\r  Dive {i}: parse error: {e}");
@@ -378,23 +418,33 @@ async fn cmd_download(
 
     conn.disconnect().await?;
 
-    if dives.is_empty() {
+    if skipped > 0 {
+        eprintln!("Skipped {} already-downloaded dive(s)", skipped);
+    }
+    if !new_dives.is_empty() {
+        eprintln!("Downloaded {} new dive(s)", new_dives.len());
+    }
+
+    // Merge existing + new dives
+    let mut all_dives = existing_dives;
+    all_dives.append(&mut new_dives);
+    all_dives.sort_by_key(|d| d.number);
+
+    if all_dives.is_empty() {
         eprintln!("No dives could be parsed.");
         return Ok(());
     }
 
-    eprintln!("Parsed {} dive(s)", dives.len());
-
     // Export
     match format {
         OutputFormat::Json => {
-            let data = DiveData { dives };
+            let data = DiveData { dives: all_dives };
             let json = serde_json::to_string_pretty(&data)?;
             std::fs::write(&output, &json)?;
-            eprintln!("Dive data saved to {}", output.display());
+            eprintln!("Dive data saved to {} ({} dives)", output.display(), data.dives.len());
         }
         OutputFormat::Csv => {
-            for dive in &dives {
+            for dive in &all_dives {
                 let stem = output
                     .file_stem()
                     .unwrap_or_default()

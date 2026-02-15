@@ -1,5 +1,5 @@
 use chrono::NaiveDateTime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Model IDs from libdivecomputer descriptor table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,7 @@ impl Model {
 }
 
 /// Dive mode from the GENIUS settings field.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DiveMode {
     Air,
@@ -57,13 +57,13 @@ pub enum DiveMode {
 }
 
 /// A single gas mix.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasMix {
     pub o2: u8,
 }
 
 /// A single dive sample point.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Sample {
     pub time_s: u32,
     pub depth_m: f64,
@@ -74,7 +74,7 @@ pub struct Sample {
 }
 
 /// A parsed dive log entry.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiveLog {
     pub number: u32,
     #[serde(with = "datetime_format")]
@@ -87,7 +87,7 @@ pub struct DiveLog {
 }
 
 /// Collection of all parsed dives.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DiveData {
     pub dives: Vec<DiveLog>,
 }
@@ -101,13 +101,23 @@ pub struct DeviceInfo {
 
 mod datetime_format {
     use chrono::NaiveDateTime;
-    use serde::{self, Serializer};
+    use serde::{self, Deserializer, Serializer};
+
+    const FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 
     pub fn serialize<S>(date: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let s = date.format("%Y-%m-%dT%H:%M:%S").to_string();
+        let s = date.format(FORMAT).to_string();
         serializer.serialize_str(&s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: String = serde::Deserialize::deserialize(deserializer)?;
+        NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)
     }
 }
