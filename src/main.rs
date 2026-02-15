@@ -4,7 +4,7 @@ mod protocol;
 mod tui;
 mod types;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -75,6 +75,17 @@ enum Commands {
         input: PathBuf,
     },
 
+    /// Correlate dive logs with SSI dive log CSV to import site, country, and buddy info
+    Correlate {
+        /// Path to SSI dive log CSV export
+        #[arg(short, long, default_value = "my.DiveSSI.com - mydivelog.csv")]
+        csv: PathBuf,
+
+        /// Path to dives.json to enrich
+        #[arg(short, long, default_value = "dives.json")]
+        json: PathBuf,
+    },
+
     /// Parse previously downloaded raw dive data (offline, no BLE needed)
     Parse {
         /// Directory containing raw dive data (dive_NNN_header.bin / dive_NNN_profile.bin)
@@ -112,6 +123,7 @@ async fn main() -> Result<()> {
         } => cmd_download(address, output, format, save_raw).await,
         Commands::Debug { address } => cmd_debug(address).await,
         Commands::View { input } => tui::run(input),
+        Commands::Correlate { csv, json } => cmd_correlate(csv, json),
         Commands::Parse {
             raw_dir,
             output,
@@ -537,6 +549,185 @@ fn cmd_parse(raw_dir: PathBuf, output: PathBuf, format: OutputFormat) -> Result<
             }
         }
     }
+
+    Ok(())
+}
+
+// ── Correlate ──
+
+struct SsiRecord {
+    datetime: chrono::NaiveDateTime,
+    site: String,
+    country: String,
+    buddy: String,
+}
+
+/// Parse a CSV line handling quoted fields with escaped quotes.
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+        } else if c == ',' {
+            fields.push(current.clone());
+            current.clear();
+        } else {
+            current.push(c);
+        }
+    }
+    fields.push(current);
+    fields
+}
+
+/// Clean buddy field: normalize whitespace, strip trailing "Sirius"/"Mares", trim.
+fn clean_buddy(raw: &str) -> String {
+    let normalized: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized
+        .trim_end_matches("Sirius")
+        .trim_end_matches("Mares")
+        .trim();
+    trimmed.to_string()
+}
+
+/// Parse SSI CSV export into records.
+fn parse_ssi_csv(contents: &str) -> Vec<SsiRecord> {
+    let mut lines = contents.lines();
+
+    // Parse header to find column indices
+    let header_line = match lines.next() {
+        Some(h) => h,
+        None => return Vec::new(),
+    };
+    let headers = parse_csv_line(header_line);
+
+    let col = |name: &str| headers.iter().position(|h| h == name);
+
+    let date_col = col("Date / Temps").unwrap_or(3);
+    let site_col = col("Site de plongée").unwrap_or(1);
+    let country_col = col("Pays").unwrap_or(2);
+    let buddy_col = col("Equipier / Instructor / Center").unwrap_or(9);
+
+    let mut records = Vec::new();
+    for (line_num, line) in lines.enumerate() {
+        let fields = parse_csv_line(line);
+        let max_col = *[date_col, site_col, country_col, buddy_col]
+            .iter()
+            .max()
+            .unwrap();
+        if fields.len() <= max_col {
+            eprintln!(
+                "Warning: skipping CSV line {} (not enough fields)",
+                line_num + 2
+            );
+            continue;
+        }
+
+        let datetime = match chrono::NaiveDateTime::parse_from_str(
+            fields[date_col].trim(),
+            "%d. %b %Y %H:%M",
+        ) {
+            Ok(dt) => dt,
+            Err(e) => {
+                eprintln!(
+                    "Warning: skipping CSV line {} (bad date {:?}: {})",
+                    line_num + 2,
+                    fields[date_col],
+                    e
+                );
+                continue;
+            }
+        };
+
+        records.push(SsiRecord {
+            datetime,
+            site: fields[site_col].trim().to_string(),
+            country: fields[country_col].trim().to_string(),
+            buddy: clean_buddy(&fields[buddy_col]),
+        });
+    }
+
+    records
+}
+
+fn cmd_correlate(csv_path: PathBuf, json_path: PathBuf) -> Result<()> {
+    use chrono::{Datelike, Timelike};
+
+    // Load dives.json
+    let json_contents = std::fs::read_to_string(&json_path)
+        .with_context(|| format!("Failed to read {}", json_path.display()))?;
+    let mut data: DiveData = serde_json::from_str(&json_contents)
+        .with_context(|| format!("Failed to parse {}", json_path.display()))?;
+
+    // Parse SSI CSV
+    let csv_contents = std::fs::read_to_string(&csv_path)
+        .with_context(|| format!("Failed to read {}", csv_path.display()))?;
+    let ssi_records = parse_ssi_csv(&csv_contents);
+    eprintln!("Parsed {} SSI record(s) from {}", ssi_records.len(), csv_path.display());
+
+    // Build lookup by (year, month, day, hour, minute)
+    let lookup: HashMap<(i32, u32, u32, u32, u32), &SsiRecord> = ssi_records
+        .iter()
+        .map(|r| {
+            let key = (
+                r.datetime.date().year(),
+                r.datetime.date().month(),
+                r.datetime.date().day(),
+                r.datetime.time().hour(),
+                r.datetime.time().minute(),
+            );
+            (key, r)
+        })
+        .collect();
+
+    let mut matched = 0u32;
+    let mut unmatched = 0u32;
+
+    for dive in &mut data.dives {
+        let key = (
+            dive.datetime.date().year(),
+            dive.datetime.date().month(),
+            dive.datetime.date().day(),
+            dive.datetime.time().hour(),
+            dive.datetime.time().minute(),
+        );
+
+        if let Some(ssi) = lookup.get(&key) {
+            if !ssi.site.is_empty() {
+                dive.site = Some(ssi.site.clone());
+            }
+            if !ssi.country.is_empty() {
+                dive.country = Some(ssi.country.clone());
+            }
+            if !ssi.buddy.is_empty() {
+                dive.buddy = Some(ssi.buddy.clone());
+            }
+            matched += 1;
+        } else {
+            unmatched += 1;
+        }
+    }
+
+    eprintln!("Matched: {}, Unmatched: {}", matched, unmatched);
+
+    // Write back
+    let json = serde_json::to_string_pretty(&data)?;
+    std::fs::write(&json_path, &json)?;
+    eprintln!("Updated {}", json_path.display());
 
     Ok(())
 }

@@ -189,7 +189,7 @@ fn render_dive_list(frame: &mut ratatui::Frame, app: &mut App, area: ratatui::la
 fn render_detail_panel(frame: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::Rect) {
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(10)])
+        .constraints([Constraint::Length(8), Constraint::Min(10)])
         .split(area);
 
     render_dive_info(frame, app, right_chunks[0]);
@@ -249,6 +249,16 @@ fn render_dive_info(frame: &mut ratatui::Frame, app: &App, area: ratatui::layout
 
     if let (Some(start), Some(end)) = (pressure_start, pressure_end) {
         right_col.push(format!(" Pressure:  {:.0} -> {:.0} bar", start, end));
+    }
+
+    if let Some(ref site) = dive.site {
+        left_col.push(format!(" Site:      {}", site));
+    }
+    if let Some(ref country) = dive.country {
+        right_col.push(format!(" Country:   {}", country));
+    }
+    if let Some(ref buddy) = dive.buddy {
+        left_col.push(format!(" Buddy:     {}", buddy));
     }
 
     // Pad columns to same length
@@ -432,6 +442,8 @@ fn render_depth_chart(frame: &mut ratatui::Frame, app: &App, area: ratatui::layo
     }
 
     let chart = Chart::new(datasets)
+        .hidden_legend_constraints((Constraint::Min(0), Constraint::Min(0)))
+        .legend_position(Some(ratatui::widgets::LegendPosition::Right))
         .block(
             Block::default()
                 .borders(Borders::ALL)

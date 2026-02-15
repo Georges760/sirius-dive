@@ -134,6 +134,9 @@ pub fn parse_dive_ecop(dive_index: u32, header: &[u8], profile: &[u8]) -> Result
         dive_mode,
         gas_mixes,
         samples,
+        site: None,
+        country: None,
+        buddy: None,
     })
 }
 

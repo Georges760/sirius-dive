@@ -84,6 +84,12 @@ pub struct DiveLog {
     pub dive_mode: DiveMode,
     pub gas_mixes: Vec<GasMix>,
     pub samples: Vec<Sample>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub site: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub buddy: Option<String>,
 }
 
 /// Collection of all parsed dives.
